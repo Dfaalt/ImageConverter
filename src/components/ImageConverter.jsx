@@ -1,8 +1,11 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import ImagePreview from "./ImagePreview";
 import toast from "react-hot-toast";
 import TextType from "./TextType/TextType";
 import { Folder, FolderOpen } from "lucide-react";
+import { supabase } from "../lib/supabaseClient";
+import { useNavigate } from "react-router-dom";
+import { getRemainingQuota, incrementUsage } from "../utils/usageTracker";
 
 const ImageConverter = () => {
   const [selectedFiles, setSelectedFiles] = useState([]);
@@ -11,8 +14,24 @@ const ImageConverter = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef(null);
+  const navigate = useNavigate();
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   const formats = ["jpg", "png", "webp", "ico"];
+
+  useEffect(() => {
+    const syncUser = async () => {
+      const { data } = await supabase.auth.getUser();
+      setIsLoggedIn(!!data.user);
+    };
+    syncUser();
+
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      setIsLoggedIn(!!session?.user);
+    });
+
+    return () => sub.subscription?.unsubscribe?.();
+  }, []);
 
   const handleFiles = (files) => {
     const imageFiles = Array.from(files).filter((file) =>
@@ -79,23 +98,29 @@ const ImageConverter = () => {
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement("canvas");
-        canvas.width = img.width;
-        canvas.height = img.height;
         const ctx = canvas.getContext("2d");
-        ctx.drawImage(img, 0, 0);
 
         let mimeType;
         let qualityValue = quality / 100;
 
         switch (selectedFormat) {
           case "jpg":
+            canvas.width = img.width;
+            canvas.height = img.height;
+            ctx.drawImage(img, 0, 0);
             mimeType = "image/jpeg";
             break;
           case "png":
+            canvas.width = img.width;
+            canvas.height = img.height;
+            ctx.drawImage(img, 0, 0);
             mimeType = "image/png";
             qualityValue = undefined;
             break;
           case "webp":
+            canvas.width = img.width;
+            canvas.height = img.height;
+            ctx.drawImage(img, 0, 0);
             mimeType = "image/webp";
             break;
           case "ico":
@@ -130,13 +155,24 @@ const ImageConverter = () => {
   const handleConvertAll = async () => {
     if (selectedFiles.length === 0 || !selectedFormat) return;
 
-    setIsLoading(true);
+    const remaining = getRemainingQuota(isLoggedIn);
+    if (remaining <= 0) {
+      toast.error(
+        isLoggedIn
+          ? "Kamu sudah mencapai batas 10 konversi hari ini."
+          : "Kamu sudah mencapai batas 5 konversi gratis hari ini. Login untuk dapat tambahan 5 konversi!"
+      );
+      if (!isLoggedIn) navigate("/auth");
+      return;
+    }
 
     const toastId = toast.loading(
       `Mengkonversi ${selectedFiles.length} gambar...`
     );
 
     try {
+      setIsLoading(true);
+
       const conversions = selectedFiles.map((fileData) =>
         convertSingleImage(fileData)
       );
@@ -153,22 +189,26 @@ const ImageConverter = () => {
         URL.revokeObjectURL(url);
       });
 
+      incrementUsage(isLoggedIn);
+      const sisa = getRemainingQuota(isLoggedIn);
+
       setIsLoading(false);
-      toast.success(`${results.length} gambar berhasil dikonversi!`, {
-        id: toastId,
-      });
+      toast.success(
+        `${results.length} gambar berhasil dikonversi! Sisa jatah hari ini: ${sisa}`,
+        { id: toastId }
+      );
     } catch (error) {
       console.error("Error:", error);
+      setIsLoading(false);
       toast.error("Terjadi kesalahan saat mengkonversi gambar", {
         id: toastId,
       });
-      setIsLoading(false);
     }
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-sky-600 to-sky-900 p-5 flex items-center justify-center">
-      <div className="bg-white rounded-3xl p-10 max-w-3xl w-full shadow-2xl">
+      <div className="bg-white/95 rounded-3xl p-10 max-w-3xl w-full shadow-2xl">
         <h1 className="text-3xl font-bold text-sky-600 text-center mb-3">
           <TextType
             text={["Dfaalt Convert", "Konverter Gambar"]}
@@ -263,7 +303,7 @@ const ImageConverter = () => {
               min="1"
               max="100"
               value={quality}
-              onChange={(e) => setQuality(e.target.value)}
+              onChange={(e) => setQuality(Number(e.target.value))}
               className="w-full"
             />
             <div className="text-center text-sky-600 font-semibold mt-2">
@@ -283,7 +323,7 @@ const ImageConverter = () => {
         {/* Convert Button */}
         <button
           onClick={handleConvertAll}
-          disabled={selectedFiles.length === 0 || !selectedFormat}
+          disabled={isLoading || selectedFiles.length === 0 || !selectedFormat}
           className="w-full mt-8 py-4 bg-gradient-to-r from-sky-600 cursor-pointer to-sky-800 text-white rounded-full text-xl font-semibold
             disabled:opacity-50 disabled:cursor-not-allowed
             hover:shadow-xl hover:-translate-y-1 transition-all"
